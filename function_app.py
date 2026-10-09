@@ -200,7 +200,7 @@ def extract_chamado_status_historico(myTimer: func.TimerRequest) -> None:
         logging.error(f"Erro ao ler itsm.chamado_status_historico: {str(e)}")
         raise
 
-    @app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
+@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
               use_monitor=False)
 def extract_cliente_organizacao(myTimer: func.TimerRequest) -> None:
     logging.info('tabela cliente_organizacao')
