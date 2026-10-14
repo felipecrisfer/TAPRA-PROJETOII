@@ -27,9 +27,9 @@ jobs:
           python-version: '3.13'
       - uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_601131a6-0a83-4c27-9ade-848d19018595 }}
-          tenant-id: ${{ secrets.AZURE_TENANT_57fe0ac9-f7f7-4580-8b30-5aa7f0ac8e3b }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_296f3e49-9ac8-48df-8d73-92e587a454ab }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
