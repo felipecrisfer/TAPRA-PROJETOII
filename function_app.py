@@ -1,395 +1,146 @@
 import logging
-import azure.functions as func
 import os
+
+import azure.functions as func
 import pyodbc
 
 app = func.FunctionApp()
 
+SCHEMA = "itsm"
+BATCH_SIZE = 1000
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_analista(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela analista')
+TABELAS = [
+    "analista",
+    "categoria",
+    "cliente_organizacao",
+    "fila",
+    "sla",
+    "solicitante",
+    "chamado",
+    "chamado_sla",
+    "chamado_status_historico",
+    "csat_avaliacao",
+]
 
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
+def montar_conn_str(host, database, user, password):
+    return (
         "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
+        f"SERVER={host};"
+        f"DATABASE={database};"
+        f"UID={user};"
+        f"PWD={password};"
         "Encrypt=yes;"
         "TrustServerCertificate=no;"
         "Connection Timeout=30;"
     )
 
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
 
-            query = "select * from itsm.analista"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.analista: {str(e)}")
-        raise
-
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_categoria(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela categoria')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
+def conectar_origem():
+    return pyodbc.connect(
+        montar_conn_str(
+            os.environ["HOST"],
+            os.environ["DATABASE"],
+            os.environ["USER"],
+            os.environ["PASSWORD"],
+        )
     )
 
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
 
-            query = "select * from itsm.categoria"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.categoria: {str(e)}")
-        raise
-
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_chamado(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela chamado')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
+def conectar_destino():
+    return pyodbc.connect(
+        montar_conn_str(
+            os.environ["DEST_HOST"],
+            os.environ["DEST_DATABASE"],
+            os.environ["DEST_USER"],
+            os.environ["DEST_PASSWORD"],
+        )
     )
 
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
+def copiar_tabela(src, dst, tabela):
+    dst_cur = dst.cursor()
 
-            query = "select * from itsm.chamado"
+    colunas_destino = {
+        r.column_name for r in dst_cur.columns(table=tabela, schema=SCHEMA)
+    }
+    if not colunas_destino:
+        raise ValueError(f"Tabela {SCHEMA}.{tabela} não existe no destino")
 
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.chamado: {str(e)}")
-        raise
+    pks = [r.column_name for r in dst_cur.primaryKeys(table=tabela, schema=SCHEMA)]
+    if not pks:
+        raise ValueError(f"{SCHEMA}.{tabela} não tem chave primária no destino")
 
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_chamado_sla(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela chamado_sla')
+    src_cur = src.cursor()
+    src_cur.execute(f"SELECT * FROM {SCHEMA}.{tabela}")
 
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
+    todas_origem = [c[0] for c in src_cur.description]
+    colunas = [c for c in todas_origem if c in colunas_destino]
+    idx = [todas_origem.index(c) for c in colunas]
 
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
+    cols = ", ".join(f"[{c}]" for c in colunas)
+    params = ", ".join("?" for _ in colunas)
+    on = " AND ".join(f"t.[{k}] = s.[{k}]" for k in pks)
+    sets = ", ".join(f"t.[{c}] = s.[{c}]" for c in colunas if c not in pks)
+    valores = ", ".join(f"s.[{c}]" for c in colunas)
 
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
+    merge = (
+        f"MERGE {SCHEMA}.{tabela} AS t "
+        f"USING (VALUES ({params})) AS s ({cols}) ON {on} "
+    )
+    if sets:
+        merge += f"WHEN MATCHED THEN UPDATE SET {sets} "
+    merge += f"WHEN NOT MATCHED THEN INSERT ({cols}) VALUES ({valores});"
+
+    
+    tem_identity = (
+        dst_cur.execute(
+            "SELECT OBJECTPROPERTY(OBJECT_ID(?), 'TableHasIdentity')",
+            f"{SCHEMA}.{tabela}",
+        ).fetchone()[0]
+        == 1
     )
 
+    if tem_identity:
+        dst_cur.execute(f"SET IDENTITY_INSERT {SCHEMA}.{tabela} ON")
+
+    total = 0
     try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
+        while True:
+            lote = src_cur.fetchmany(BATCH_SIZE)
+            if not lote:
+                break
+            dados = [tuple(linha[i] for i in idx) for linha in lote]
+            dst_cur.executemany(merge, dados)
+            total += len(dados)
+    finally:
+        if tem_identity:
+            dst_cur.execute(f"SET IDENTITY_INSERT {SCHEMA}.{tabela} OFF")
 
-            query = "select * from itsm.chamado_sla"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.chamado_sla: {str(e)}")
-        raise
+    logging.info(f"{SCHEMA}.{tabela}: {total} linhas processadas")
 
 
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_chamado_status_historico(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela chamado_status_historico')
+@app.timer_trigger(
+    schedule="0 0 3 * * *",
+    arg_name="myTimer",
+    run_on_startup=False, 
+    use_monitor=False,
+)
+def popular_tabelas(myTimer: func.TimerRequest) -> None:
+    logging.info("Iniciando carga diária")
 
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
+    src = conectar_origem()
+    dst = conectar_destino()
     try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
+        for tabela in TABELAS:
+            try:
+                copiar_tabela(src, dst, tabela)
+                dst.commit()
+            except Exception as e:
+                dst.rollback()
+                logging.error(f"Erro ao popular {SCHEMA}.{tabela}: {e}")
+                raise  
+    finally:
+        src.close()
+        dst.close()
 
-            query = "select * from itsm.chamado_status_historico"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.chamado_status_historico: {str(e)}")
-        raise
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_cliente_organizacao(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela cliente_organizacao')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
-
-            query = "select * from itsm.cliente_organizacao"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.cliente_organizacao: {str(e)}")
-        raise
-
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_csat_avaliacao(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela csat_avaliacao')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
-
-            query = "select * from itsm.csat_avaliacao"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.csat_avaliacao: {str(e)}")
-        raise
-
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_fila(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela fila')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
-
-            query = "select * from itsm.fila"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.fila: {str(e)}")
-        raise
-
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_sla(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela sla')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
-
-            query = "select * from itsm.sla"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.sla: {str(e)}")
-        raise
-
-
-@app.timer_trigger(schedule="0 * * * * *", arg_name="myTimer", run_on_startup=False,
-              use_monitor=False)
-def extract_solicitante(myTimer: func.TimerRequest) -> None:
-    logging.info('tabela solicitante')
-
-    sql_server = os.getenv("HOST")
-    sql_database = os.getenv("DATABASE")
-    sql_user = os.getenv("USER")
-    sql_pass = os.getenv("PASSWORD")
-
-    logging.info(f'servidor={sql_server}, banco de dados={sql_database}, usuario={sql_user}')
-
-    conn_str = (
-        "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={sql_server};"
-        f"DATABASE={sql_database};"
-        f"UID={sql_user};"
-        f"PWD={sql_pass};"
-        "Encrypt=yes;"
-        "TrustServerCertificate=no;"
-        "Connection Timeout=30;"
-    )
-
-    try:
-        with pyodbc.connect(conn_str) as conn:
-            cursor = conn.cursor()
-
-            query = "select * from itsm.solicitante"
-
-            cursor.execute(query)
-            rows = cursor.fetchall()
-
-            logging.info(rows)
-
-    except Exception as e:
-        logging.error(f"Erro ao ler itsm.solicitante: {str(e)}")
-        raise
+    logging.info("Carga diária finalizada")
